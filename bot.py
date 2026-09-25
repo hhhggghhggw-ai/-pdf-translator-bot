@@ -4,11 +4,11 @@ import io
 import requests
 import fitz
 import time
-from deep_translator import GoogleTranslator
+from deep_translator import MyMemoryTranslator
 
 # ===== اختبار الترجمة عند بدء البوت =====
 try:
-    _test = GoogleTranslator(source='auto', target='ar').translate("Hello")
+    _test = MyMemoryTranslator(source='en-US', target='ar-SA').translate("Hello")
     print(f"[TEST TRANSLATE] النتيجة: {_test}")
 except Exception as e:
     print(f"[TEST TRANSLATE ERROR] {e}")
@@ -23,17 +23,17 @@ def send_welcome(message):
     bot.reply_to(message, "أهلاً بك يا حيدر! الباتروس جاهز الآن لترجمة الملفات بنفس التنسيق المطلوب تماماً.")
 
 
-def translate_batch(texts):
-    """ترجمة قائمة نصوص دفعة واحدة لتجنب الحظر"""
-    if not texts:
-        return []
+def translate_text(text):
+    """ترجمة نص واحد باستخدام MyMemory"""
+    if not text.strip():
+        return ""
     try:
-        translator = GoogleTranslator(source='auto', target='ar')
-        results = translator.translate_batch(texts)
-        return results if results else [""] * len(texts)
+        translator = MyMemoryTranslator(source='en-US', target='ar-SA')
+        result = translator.translate(text)
+        return result if result else ""
     except Exception as e:
-        print(f"[BATCH ERROR] {e}")
-        return [""] * len(texts)
+        print(f"[TRANSLATE ERROR] {e} | النص: {text[:50]}")
+        return ""
 
 
 @bot.message_handler(content_types=['document'])
@@ -55,7 +55,7 @@ def handle_pdf(message):
         font_exists = os.path.exists(arabic_font_path)
         print(f"[FONT] الخط العربي موجود؟ {font_exists}")
 
-        # ===== المرحلة 1: جمع كل الأسطر من كل الصفحات =====
+        # ===== المرحلة 1: جمع كل الأسطر =====
         all_lines = []
         for page_num, page in enumerate(doc):
             text_instances = page.get_text("dict")
@@ -80,21 +80,12 @@ def handle_pdf(message):
             bot.reply_to(message, "⚠️ لم يتم العثور على نص في الملف.")
             return
 
-        # ===== المرحلة 2: ترجمة كل الأسطر دفعة دفعة (50 سطر لكل دفعة) =====
-        texts_to_translate = [item["text"] for item in all_lines]
-        all_translations = []
-
-        batch_size = 50
-        for i in range(0, len(texts_to_translate), batch_size):
-            batch = texts_to_translate[i:i + batch_size]
-            print(f"[INFO] ترجمة دفعة {i // batch_size + 1} ({len(batch)} سطر)...")
-            translations = translate_batch(batch)
-            all_translations.extend(translations)
-            time.sleep(1)  # انتظار ثانية بين الدفعات
-
-        # ===== المرحلة 3: كتابة الترجمات على الصفحات =====
+        # ===== المرحلة 2: ترجمة كل سطر على حدة =====
         translated_count = 0
-        for item, translated in zip(all_lines, all_translations):
+        failed_count = 0
+
+        for idx, item in enumerate(all_lines):
+            translated = translate_text(item["text"])
             if translated and translated.strip():
                 page = doc[item["page"]]
                 x0, y0, x1, y1 = item["bbox"]
@@ -120,8 +111,18 @@ def handle_pdf(message):
                     translated_count += 1
                 except Exception as e:
                     print(f"[INSERT ERROR] {e}")
+                    failed_count += 1
+            else:
+                failed_count += 1
+
+            # كل 10 أسطر اطبع تقدم
+            if (idx + 1) % 10 == 0:
+                print(f"[PROGRESS] {idx + 1}/{len(all_lines)} - ترجم: {translated_count}, فشل: {failed_count}")
+
+            time.sleep(0.2)  # انتظار بسيط بين الطلبات
 
         print(f"[INFO] عدد الأسطر المترجمة: {translated_count}")
+        print(f"[INFO] عدد الأسطر الفاشلة: {failed_count}")
 
         if translated_count == 0:
             bot.reply_to(message, "⚠️ لم يتم ترجمة أي سطر! تحقق من الـ Logs في Railway.")
