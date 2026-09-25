@@ -2,7 +2,6 @@ import os
 import io
 import telebot
 import time
-import copy
 from deep_translator import MyMemoryTranslator
 from pptx import Presentation
 from pptx.util import Pt
@@ -21,8 +20,14 @@ bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
 
 
+# ===== إعدادات قابلة للتعديل =====
+ORIGINAL_FONT_SCALE = 0.85   # تصغير الأصل بنسبة 15%
+TRANSLATION_FONT_SCALE = 0.80  # تصغير الترجمة بنسبة 20%
+MIN_FONT_SIZE = 7             # أصغر حجم مسموح
+SPACE_FONT_SIZE = 6           # حجم فراغ بين المجموعات
+
+
 def translate_text(text):
-    """ترجمة نص واحد"""
     if not text.strip():
         return ""
     try:
@@ -30,7 +35,7 @@ def translate_text(text):
         result = translator.translate(text)
         return result if result else ""
     except Exception as e:
-        print(f"[TRANSLATE ERROR] {e} | النص: {text[:50]}")
+        print(f"[TRANSLATE ERROR] {e}")
         return ""
 
 
@@ -54,42 +59,26 @@ def get_run_size(run, default=12):
 
 
 def split_into_lines(text):
-    """
-    تقسيم النص إلى أسطر منفصلة
-    - بناءً على \n
-    - أو إذا طويل جداً، نقسمه
-    """
-    # نستبدل \r\n بـ \n
+    """تقسيم النص إلى أسطر"""
     text = text.replace('\r\n', '\n').replace('\r', '\n')
-
-    # نقسم على \n أولاً
     lines = [line.strip() for line in text.split('\n')]
-
-    # نحذف الأسطر الفارغة
     lines = [line for line in lines if line]
-
-    # إذا ما فيه \n، السطر كامل جملة واحدة
     if not lines:
         return [text.strip()]
-
     return lines
 
 
-def create_text_paragraph(text_frame, text, color, size, space_before=0):
-    """
-    إنشاء فقرة جديدة في text_frame بالنص واللون والحجم المحدد
-    """
+def create_text_paragraph(text_frame, text, color, size):
+    """إنشاء فقرة جديدة"""
     new_para = text_frame.add_paragraph()
     new_run = new_para.add_run()
     new_run.text = text
 
-    # الحجم
     try:
         new_run.font.size = Pt(size)
     except:
         pass
 
-    # اللون
     try:
         new_run.font.color.rgb = color
     except:
@@ -105,15 +94,59 @@ def create_text_paragraph(text_frame, text, color, size, space_before=0):
     return new_para
 
 
+def process_table(table, slide_num):
+    """معالجة الجداول: ترجمة كل خلية"""
+    translated = 0
+    failed = 0
+    for row_idx, row in enumerate(table.rows):
+        for col_idx, cell in enumerate(row.cells):
+            cell_text = cell.text.strip()
+            if len(cell_text) > 2:
+                # لا نترجم الخلايا الفارغة أو الرقمية
+                if not any(c.isalpha() for c in cell_text):
+                    continue
+
+                # نترجم
+                ar_text = translate_text(cell_text)
+                if ar_text:
+                    # نضيف الترجمة في الخلية
+                    try:
+                        # نضيف فقرة جديدة داخل الخلية
+                        tf = cell.text_frame
+                        new_p = tf.add_paragraph()
+                        new_run = new_p.add_run()
+                        new_run.text = ar_text
+                        # نصغّر الخط
+                        try:
+                            new_run.font.size = Pt(9)
+                        except:
+                            pass
+                        # RTL
+                        try:
+                            pPr = new_p._p.get_or_add_pPr()
+                            pPr.set('rtl', '1')
+                        except:
+                            pass
+                        translated += 1
+                    except Exception as e:
+                        print(f"[TABLE CELL ERROR] {e}")
+                        failed += 1
+                else:
+                    failed += 1
+                time.sleep(0.15)
+    return translated, failed
+
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(
         message,
         "أهلاً بك يا حيدر! 🎯\n"
-        "أرسل لي ملف PowerPoint (PPTX) وسأترجمه:\n"
-        "✅ سطر سطر\n"
-        "✅ ترجمة تحت كل سطر\n"
-        "✅ مسافة بين المجموعات"
+        "أرسل ملف PPTX وسأترجمه:\n"
+        "✅ سطر سطر مع ترجمته تحته\n"
+        "✅ الألوان متناسقة\n"
+        "✅ حجم الخط مصغّر ليناسب الصفحة\n"
+        "✅ الجداول مترجمة أيضاً"
     )
 
 
@@ -134,21 +167,32 @@ def handle_pptx(message):
         prs = Presentation(io.BytesIO(downloaded_file))
         print(f"[INFO] عدد الشرائح: {len(prs.slides)}")
 
-        translated_count = 0
-        failed_count = 0
+        total_translated = 0
+        total_failed = 0
 
         for slide_idx, slide in enumerate(prs.slides):
-            print(f"[SLIDE] معالجة الشريحة {slide_idx + 1}")
+            print(f"[SLIDE {slide_idx + 1}] بدء المعالجة")
+
+            slide_translated = 0
+            slide_failed = 0
 
             for shape in slide.shapes:
+                # === 1) الجداول ===
+                if shape.has_table:
+                    print(f"[TABLE] معالجة جدول في الشريحة {slide_idx + 1}")
+                    t, f = process_table(shape.table, slide_idx + 1)
+                    slide_translated += t
+                    slide_failed += f
+                    continue
+
+                # === 2) النصوص ===
                 if not shape.has_text_frame:
                     continue
 
                 text_frame = shape.text_frame
 
-                # نجمع كل الأسطر من كل الفقرات
-                all_lines = []  # [{text, color, size}]
-
+                # نجمع كل الأسطر
+                all_lines = []
                 for para in text_frame.paragraphs:
                     para_text = ""
                     para_color = RGBColor(0, 0, 0)
@@ -162,7 +206,6 @@ def handle_pptx(message):
 
                     para_text = para_text.strip()
                     if len(para_text) > 2:
-                        # نقسم الفقرة إلى أسطر
                         lines = split_into_lines(para_text)
                         for line in lines:
                             if len(line) > 2:
@@ -175,46 +218,50 @@ def handle_pptx(message):
                 if not all_lines:
                     continue
 
-                # ===== نمسح محتوى المربع الأصلي =====
-                # نحذف كل الفقرات الحالية
+                # نمسح كل الفقرات
                 for para in list(text_frame.paragraphs):
                     p = para._p
                     p.getparent().remove(p)
 
-                # ===== نضيف: سطر أصلي + ترجمته + مسافة =====
+                # نضيف: سطر + ترجمته + مسافة
                 for line_data in all_lines:
                     original_text = line_data["text"]
                     color = line_data["color"]
                     size = line_data["size"]
 
+                    # حجم السطر الأصلي المصغّر
+                    new_size = max(MIN_FONT_SIZE, int(size * ORIGINAL_FONT_SCALE))
+
                     # 1) السطر الإنجليزي
-                    create_text_paragraph(text_frame, original_text, color, size)
+                    create_text_paragraph(text_frame, original_text, color, new_size)
 
                     # 2) الترجمة
                     translated = translate_text(original_text)
                     if translated:
-                        translated_count += 1
-                        # حجم الترجمة أصغر بنقطة
-                        t_size = max(9, int(size) - 1)
+                        slide_translated += 1
+                        t_size = max(MIN_FONT_SIZE, int(size * TRANSLATION_FONT_SCALE))
                         create_text_paragraph(text_frame, translated, color, t_size)
                     else:
-                        failed_count += 1
+                        slide_failed += 1
 
-                    # 3) مسافة فارغة
+                    # 3) مسافة
                     empty_para = text_frame.add_paragraph()
                     empty_run = empty_para.add_run()
                     empty_run.text = " "
                     try:
-                        empty_run.font.size = Pt(8)
+                        empty_run.font.size = Pt(SPACE_FONT_SIZE)
                     except:
                         pass
 
                     time.sleep(0.15)
 
-        print(f"[INFO] عدد الأسطر المترجمة: {translated_count}")
-        print(f"[INFO] عدد الأسطر الفاشلة: {failed_count}")
+            print(f"[SLIDE {slide_idx + 1}] ترجم: {slide_translated}, فشل: {slide_failed}")
+            total_translated += slide_translated
+            total_failed += slide_failed
 
-        if translated_count == 0:
+        print(f"[INFO] الإجمالي - مترجم: {total_translated}, فشل: {total_failed}")
+
+        if total_translated == 0:
             bot.reply_to(message, "⚠️ لم يتم ترجمة أي نص! تحقق من الـ Logs.")
             return
 
@@ -226,7 +273,7 @@ def handle_pptx(message):
             message.chat.id,
             output_io,
             visible_file_name="translated_presentation.pptx",
-            caption=f"✅ تمت ترجمة {translated_count} سطر!"
+            caption=f"✅ تمت ترجمة {total_translated} نص!"
         )
 
     except Exception as e:
