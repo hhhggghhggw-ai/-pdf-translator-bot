@@ -2,3 +2,4 @@ pyTelegramBotAPI
 PyPDF2
 requests
 pymupdf
+deep-translator
