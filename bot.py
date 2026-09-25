@@ -15,7 +15,7 @@ try:
 except Exception as e:
     print(f"[TEST TRANSLATE ERROR] {e}")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or ""
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnhphMu9dpMxMbiuCfA3SMkOF0"
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
 
