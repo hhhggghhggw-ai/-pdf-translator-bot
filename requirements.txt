@@ -1,2 +1,5 @@
 pyTelegramBotAPI
+deep_translator
+PyPDF2
+pymupdf
 requests
