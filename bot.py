@@ -4,6 +4,8 @@ import io
 import requests
 import fitz
 import time
+import arabic_reshaper
+from bidi.algorithm import get_display
 from deep_translator import MyMemoryTranslator
 
 # ===== اختبار الترجمة عند بدء البوت =====
@@ -16,6 +18,19 @@ except Exception as e:
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnphMu9"
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
+
+
+def fix_arabic(text):
+    """تصحيح النص العربي ليعرض بشكل صحيح في PyMuPDF"""
+    if not text:
+        return ""
+    try:
+        reshaped = arabic_reshaper.reshape(text)
+        bidi_text = get_display(reshaped)
+        return bidi_text
+    except Exception as e:
+        print(f"[ARABIC FIX ERROR] {e}")
+        return text
 
 
 @bot.message_handler(commands=['start'])
@@ -80,7 +95,7 @@ def handle_pdf(message):
             bot.reply_to(message, "⚠️ لم يتم العثور على نص في الملف.")
             return
 
-        # ===== المرحلة 2: ترجمة كل سطر على حدة =====
+        # ===== المرحلة 2: ترجمة كل سطر وكتابته تحت الأصلي =====
         translated_count = 0
         failed_count = 0
 
@@ -89,24 +104,29 @@ def handle_pdf(message):
             if translated and translated.strip():
                 page = doc[item["page"]]
                 x0, y0, x1, y1 = item["bbox"]
-                insert_point = fitz.Point(x0, y1 + 10)
+
+                # 🔧 زيادة المسافة بين الأصلي والترجمة (من 10 إلى 14)
+                insert_point = fitz.Point(x0, y1 + 14)
+
+                # 🔧 تصحيح العربي (حل مشكلة الحروف المقلوبة)
+                arabic_fixed = fix_arabic(translated)
 
                 try:
                     if font_exists:
                         page.insert_text(
                             insert_point,
-                            translated,
-                            fontsize=8,
+                            arabic_fixed,
+                            fontsize=9,
                             fontname="F0",
                             fontfile=arabic_font_path,
-                            color=(0, 0, 0.6)
+                            color=(0.1, 0.1, 0.6)  # أزرق داكن واضح
                         )
                     else:
                         page.insert_text(
                             insert_point,
-                            translated,
-                            fontsize=8,
-                            color=(0, 0, 0.6)
+                            arabic_fixed,
+                            fontsize=9,
+                            color=(0.1, 0.1, 0.6)
                         )
                     translated_count += 1
                 except Exception as e:
@@ -119,7 +139,7 @@ def handle_pdf(message):
             if (idx + 1) % 10 == 0:
                 print(f"[PROGRESS] {idx + 1}/{len(all_lines)} - ترجم: {translated_count}, فشل: {failed_count}")
 
-            time.sleep(0.2)  # انتظار بسيط بين الطلبات
+            time.sleep(0.2)
 
         print(f"[INFO] عدد الأسطر المترجمة: {translated_count}")
         print(f"[INFO] عدد الأسطر الفاشلة: {failed_count}")
