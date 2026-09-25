@@ -1,12 +1,8 @@
 import os
 import telebot
-import PyPDF2
 import io
 import requests
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+import fitz  # مكتبة PyMuPDF للتعامل مع ملفات PDF والحفاظ على الصور والتنسيق
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnphMu9"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -14,7 +10,7 @@ bot.remove_webhook()
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً بك يا حيدر! أرسل لي ملف PDF وسأقوم بترجمته سطراً بسطر مع الاحتفاظ بالتنسيق وإرساله لك كملف جديد.")
+    bot.reply_to(message, "أهلاً بك يا حيدر! أرسل لي ملف PDF وسأقوم بترجمته مع الحفاظ على الصور والتنسيق الأصلي تماماً وإرجاع الملف لك.")
 
 def translate_text(text):
     if not text.strip():
@@ -43,68 +39,54 @@ def handle_pdf(message):
             bot.reply_to(message, "⚠️ عذراً، يرجى إرسال ملف بصيغة PDF فقط.")
             return
             
-        bot.reply_to(message, "⏳ جاري قراءة الملف، الترجمة سطر بسطر، وإنشاء ملف الـ PDF الجديد... البضع ثوانٍ من فضلك.")
+        bot.reply_to(message, "⏳ جاري قراءة الملف، ترجمته، والحفاظ على الصور والتنسيق... يرجى الانتظار قليلاً.")
         
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
-        pdf_file = io.BytesIO(downloaded_file)
-        reader = PyPDF2.PdfReader(pdf_file)
+        # فتح ملف الـ PDF باستخدام PyMuPDF من الذاكرة
+        doc = fitz.open(stream=downloaded_file, filetype="pdf")
         
-        if len(reader.pages) == 0:
-            bot.reply_to(message, "⚠️ عذراً، الملف فارغ.")
-            return
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            # استخراج الكتل النصية مع إحداثياتها للحفاظ على مكانها
+            blocks = page.get_text("blocks")
             
-        # استخراج النص من الصفحة الأولى كمثال عملي للترجمة السطرية
-        page = reader.pages[0]
-        extracted_text = page.extract_text() or ""
-        
-        if not extracted_text.strip():
-            bot.reply_to(message, "⚠️ لم يتم العثور على نص قابل للقراءة في الصفحة.")
-            return
+            for b in blocks:
+                # b يحتوي على: (x0, y0, x1, y1, text, block_no, block_type)
+                # block_type == 0 يعني نص (وليست صورة)
+                if b[6] == 0:
+                    original_text = b[4].strip()
+                    if original_text:
+                        translated = translate_text(original_text)
+                        # تجهيز النص المدمج (الأصلي وتحته الترجمة)
+                        combined_text = f"{original_text}\n[ترجمة: {translated}]"
+                        
+                        # تحديد مربع النص الأصلي لمسحه أو الكتابة فوقه بشكل منظم
+                        rect = fitz.Rect(b[0], b[1], b[2], b[3])
+                        
+                        # رسم مستطيل أبيض صغير لتغطية النص القديم بشكل نظيف (اختياري لعدم التداخل)
+                        page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1))
+                        
+                        # كتابة النص الجديد (الأصلي + الترجمة) في نفس المكان
+                        page.insert_textbox(rect, combined_text, fontsize=8, color=(0, 0, 0))
 
-        lines = extracted_text.split('\n')
-        
-        # إنشاء ملف PDF جديد للنتيجة
+        # حفظ الملف الناتج في الذاكرة
         output_pdf_io = io.BytesIO()
-        c = canvas.Canvas(output_pdf_io, pagesize=letter)
-        width, height = letter
-        
-        y_position = height - 50  # البدء من أعلى الصفحة
-        
-        for line in lines[:25]:  # ترجمة أول 25 سطراً كبداية لضمان السرعة وعدم تجاوز الوقت
-            if not line.strip():
-                continue
-                
-            translated_line = translate_text(line)
-            
-            # كتابة السطر الأصلي بالإنجليزية
-            c.setFont("Helvetica", 10)
-            c.drawString(50, y_position, line[:80]) # تقطير النص الطويل لكي لا يخرج عن الحافة
-            y_position -= 15
-            
-            # كتابة الترجمة تحته
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(50, y_position, f"ترجمة: {translated_line[:80]}")
-            y_position -= 25
-            
-            if y_position < 50: # الانتقال لصفحة جديدة إذا انتهت المساحة
-                c.showPage()
-                y_position = height - 50
-                
-        c.save()
+        doc.save(output_pdf_io)
+        doc.close()
         output_pdf_io.seek(0)
         
-        # إرسال الملف الناتج للمستخدم
+        # إرسال الملف المحدث للمستخدم
         bot.send_document(
             message.chat.id, 
             output_pdf_io, 
-            visible_file_name="translated_output.pdf", 
-            caption="✅ تم ترجمة الملف بنجاح (السطر الأصلي وتحته الترجمة العربية)!"
+            visible_file_name="translated_formatted.pdf", 
+            caption="✅ تم ترجمة الملف مع الحفاظ على الصور والتنسيق الأصلي بنجاح!"
         )
         
     except Exception as e:
-        bot.reply_to(message, f"❌ حدث خطأ أثناء المعالجة: {str(e)}")
+        bot.reply_to(message, f"❌ حدث خطأ أثناء معالجة الملف: {str(e)}")
 
 print("🤖 بوت الباتروس يعمل الآن...")
 bot.infinity_polling()
