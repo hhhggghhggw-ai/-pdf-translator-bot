@@ -1,28 +1,29 @@
 import os
-import telebot
 import io
-import requests
-import fitz
+import telebot
 import time
-import re
 import arabic_reshaper
 from bidi.algorithm import get_display
 from deep_translator import MyMemoryTranslator
+from pptx import Presentation
+from pptx.util import Pt, Emu
+from pptx.dml.color import RGBColor
+from PIL import Image
 
-# ===== اختبار الترجمة عند بدء البوت =====
+# ===== اختبار الترجمة =====
 try:
     _test = MyMemoryTranslator(source='en-US', target='ar-SA').translate("Hello")
     print(f"[TEST TRANSLATE] النتيجة: {_test}")
 except Exception as e:
     print(f"[TEST TRANSLATE ERROR] {e}")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnhphMu9dpMxMbiuCfA3SMkOF0"
+BOT_TOKEN = os.getenv("BOT_TOKEN") or ""
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.remove_webhook()
 
 
 def fix_arabic(text):
-    """تصحيح النص العربي ليعرض بشكل صحيح في PyMuPDF"""
+    """تصحيح النص العربي للعرض الصحيح"""
     if not text:
         return ""
     try:
@@ -47,191 +48,184 @@ def translate_text(text):
         return ""
 
 
-def is_sentence_end(text):
-    """هل النص ينتهي بنقطة/؟/!؟"""
-    return bool(re.search(r'[.!?]\s*$', text.strip()))
-
-
-def get_line_color(line):
-    """
-    استخراج اللون السائد في السطر
-    يُرجع tuple: (r, g, b)
-    """
-    color_counts = {}
-    for span in line.get("spans", []):
-        color_int = span.get("color", 0)
-        # تحويل اللون من int إلى RGB
-        r = (color_int >> 16) & 255
-        g = (color_int >> 8) & 255
-        b = color_int & 255
-        # تجميع حسب اللون
-        color_key = (r // 50, g // 50, b // 50)  # تجميع تقريبي
-        color_counts[color_key] = color_counts.get(color_key, 0) + len(span.get("text", ""))
-    
-    if not color_counts:
-        return (0, 0, 0)  # أسود افتراضي
-    
-    # اللون الأكثر تكراراً
-    dominant = max(color_counts, key=color_counts.get)
-    # إرجاعه بألوان فعلية (نأخذ من أول span لهذا اللون)
-    for span in line.get("spans", []):
-        color_int = span.get("color", 0)
-        r = (color_int >> 16) & 255
-        g = (color_int >> 8) & 255
-        b = color_int & 255
-        if (r // 50, g // 50, b // 50) == dominant:
-            return (r / 255, g / 255, b / 255)
-    
-    return (0, 0, 0)
-
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً بك يا حيدر! الباتروس جاهز الآن لترجمة الملفات جملة جملة مع الحفاظ على الألوان.")
+    bot.reply_to(
+        message,
+        "أهلاً بك يا حيدر! 🎯\n"
+        "أرسل لي ملف PowerPoint (PPTX) وسأترجمه:\n"
+        "✅ النص الأصلي كما هو\n"
+        "✅ الترجمة العربية تحت كل نص\n"
+        "✅ الألوان متناسقة\n"
+        "✅ الصور والجداول محفوظة"
+    )
 
 
 @bot.message_handler(content_types=['document'])
-def handle_pdf(message):
+def handle_pptx(message):
     try:
-        if not message.document.file_name.endswith('.pdf'):
-            bot.reply_to(message, "⚠️ عذراً، يرجى إرسال ملف بصيغة PDF فقط.")
+        file_name = message.document.file_name.lower()
+
+        # التحقق من النوع
+        if not (file_name.endswith('.pptx') or file_name.endswith('.ppt')):
+            bot.reply_to(message, "⚠️ عذراً، يرجى إرسال ملف PowerPoint (PPTX) فقط.")
             return
 
-        bot.reply_to(message, "⏳ جاري معالجة الملف وترجمة الجمل مع الألوان...")
+        if file_name.endswith('.ppt') and not file_name.endswith('.pptx'):
+            bot.reply_to(message, "⚠️ الرجاء حفظ الملف بصيغة PPTX (وليس PPT القديم).")
+            return
 
+        bot.reply_to(message, "⏳ جاري معالجة الملف وترجمة المحتوى... قد يأخذ دقائق.")
+
+        # تحميل الملف
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
-        doc = fitz.open(stream=downloaded_file, filetype="pdf")
-
-        # ===== الخط العربي =====
-        arabic_font_path = "Amiri-Regular.ttf"
-        font_exists = os.path.exists(arabic_font_path)
-        print(f"[FONT] الخط العربي موجود؟ {font_exists}")
+        # فتح العرض
+        prs = Presentation(io.BytesIO(downloaded_file))
+        print(f"[INFO] عدد الشرائح: {len(prs.slides)}")
 
         translated_count = 0
         failed_count = 0
 
-        for page_num, page in enumerate(doc):
-            print(f"[PAGE] معالجة الصفحة {page_num + 1}")
+        # ===== المرور على كل شريحة =====
+        for slide_idx, slide in enumerate(prs.slides):
+            print(f"[SLIDE] معالجة الشريحة {slide_idx + 1}")
 
-            text_instances = page.get_text("dict")
+            # نجمع كل النصوص في الشريحة
+            text_shapes = []  # [{shape, original_text, color, font_size}]
 
-            # ===== المرحلة 1: جمع الأسطر مع ألوانها =====
-            page_lines = []
-            for block in text_instances.get("blocks", []):
-                if block.get("type") == 0:
-                    for line in block.get("lines", []):
-                        line_text = ""
-                        x0, y0, x1, y1 = line.get("bbox", [0, 0, 0, 0])
-                        for span in line.get("spans", []):
-                            line_text += span.get("text", "") + " "
-                        line_text = line_text.strip()
-                        if line_text:
-                            # استخراج لون السطر
-                            color = get_line_color(line)
-                            page_lines.append({
-                                "bbox": (x0, y0, x1, y1),
-                                "text": line_text,
-                                "color": color
+            for shape in slide.shapes:
+                # === 1) النصوص ===
+                if shape.has_text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        full_text = ""
+                        color = (0, 0, 0)  # أسود افتراضي
+                        font_size = 12
+
+                        for run in paragraph.runs:
+                            if run.text:
+                                full_text += run.text
+
+                                # استخراج اللون
+                                try:
+                                    if run.font.color and run.font.color.rgb:
+                                        rgb = run.font.color.rgb
+                                        color = (rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+                                except:
+                                    pass
+
+                                # استخراج حجم الخط
+                                try:
+                                    if run.font.size:
+                                        font_size = run.font.size.pt
+                                except:
+                                    pass
+
+                        full_text = full_text.strip()
+                        if len(full_text) > 2:
+                            text_shapes.append({
+                                "shape": shape,
+                                "text": full_text,
+                                "color": color,
+                                "font_size": font_size,
+                                "paragraph": paragraph
                             })
 
-            # ===== المرحلة 2: تجميع الأسطر في جمل =====
-            sentences = []
-            current_sentence = {"text": "", "lines": [], "color": (0, 0, 0)}
+                # === 2) الصور ===
+                if shape.shape_type == 13:  # PICTURE
+                    # نصغر الصورة بنسبة 70% (اختياري)
+                    try:
+                        new_width = int(shape.width * 0.7)
+                        new_height = int(shape.height * 0.7)
+                        shape.width = new_width
+                        shape.height = new_height
+                        print(f"[IMAGE] تم تصغير الصورة في الشريحة {slide_idx + 1}")
+                    except Exception as e:
+                        print(f"[IMAGE RESIZE ERROR] {e}")
 
-            for line in page_lines:
-                # إذا كانت الجملة فارغة → نأخذ لون أول سطر
-                if not current_sentence["lines"]:
-                    current_sentence["color"] = line["color"]
-                current_sentence["text"] += " " + line["text"]
-                current_sentence["lines"].append(line)
+                # === 3) الجداول ===
+                if shape.has_table:
+                    try:
+                        table = shape.table
+                        # نصغر الجدول بنسبة 70%
+                        new_width = int(shape.width * 0.7)
+                        new_height = int(shape.height * 0.7)
+                        shape.width = new_width
+                        shape.height = new_height
+                        print(f"[TABLE] تم تصغير الجدول في الشريحة {slide_idx + 1}")
 
-                if is_sentence_end(line["text"]):
-                    current_sentence["text"] = current_sentence["text"].strip()
-                    sentences.append(current_sentence)
-                    current_sentence = {"text": "", "lines": [], "color": (0, 0, 0)}
+                        # نترجم محتوى الجدول
+                        for row in table.rows:
+                            for cell in row.cells:
+                                cell_text = cell.text.strip()
+                                if len(cell_text) > 2:
+                                    cell_translated = translate_text(cell_text)
+                                    if cell_translated:
+                                        translated_count += 1
+                                        # نضيف الترجمة في نفس الخلية تحت النص
+                                        arabic_fixed = fix_arabic(cell_translated)
+                                        cell.text = cell_text + "\n" + arabic_fixed
+                                    else:
+                                        failed_count += 1
+                    except Exception as e:
+                        print(f"[TABLE ERROR] {e}")
 
-            if current_sentence["text"].strip():
-                current_sentence["text"] = current_sentence["text"].strip()
-                sentences.append(current_sentence)
+            # ===== ترجمة النصوص وإضافة الترجمة تحتها =====
+            for text_data in text_shapes:
+                shape = text_data["shape"]
+                original_text = text_data["text"]
+                color = text_data["color"]
+                font_size = text_data["font_size"]
 
-            print(f"[INFO] عدد الجمل في الصفحة: {len(sentences)}")
+                translated = translate_text(original_text)
 
-            # ===== المرحلة 3: ترجمة كل جملة =====
-            for sentence in sentences:
-                if len(sentence["text"]) < 3:
-                    continue
-
-                translated = translate_text(sentence["text"])
-
-                if translated and translated.strip():
-                    last_line = sentence["lines"][-1]
-                    x0, y0, x1, y1 = last_line["bbox"]
-                    color = sentence["color"]
-
+                if translated:
+                    translated_count += 1
                     arabic_fixed = fix_arabic(translated)
 
-                    # تقسيم الترجمة الطويلة إلى أسطر
-                    max_chars = 85
-                    words = arabic_fixed.split()
-                    lines_to_write = []
-                    current_line = ""
-                    for word in words:
-                        if len(current_line) + len(word) + 1 <= max_chars:
-                            current_line += " " + word if current_line else word
-                        else:
-                            lines_to_write.append(current_line)
-                            current_line = word
-                    if current_line:
-                        lines_to_write.append(current_line)
+                    try:
+                        # نضيف فقرة جديدة في نفس مربع النص
+                        new_paragraph = shape.text_frame.add_paragraph()
+                        new_run = new_paragraph.add_run()
+                        new_run.text = arabic_fixed
 
-                    # كتابة كل سطر تحت السابق
-                    for i, line_text in enumerate(lines_to_write):
-                        insert_point = fitz.Point(x0, y1 + 13 + (i * 11))
-                        try:
-                            if font_exists:
-                                page.insert_text(
-                                    insert_point,
-                                    line_text,
-                                    fontsize=9,
-                                    fontname="F0",
-                                    fontfile=arabic_font_path,
-                                    color=color
-                                )
-                            else:
-                                page.insert_text(
-                                    insert_point,
-                                    line_text,
-                                    fontsize=9,
-                                    color=color
-                                )
-                        except Exception as e:
-                            print(f"[INSERT ERROR] {e}")
+                        # حجم خط الترجمة (أصغر قليلاً)
+                        new_run.font.size = Pt(max(9, font_size - 1))
 
-                    translated_count += 1
+                        # نفس اللون
+                        new_run.font.color.rgb = RGBColor(
+                            int(color[0] * 255),
+                            int(color[1] * 255),
+                            int(color[2] * 255)
+                        )
+
+                        print(f"[TRANSLATED] {original_text[:40]} → {arabic_fixed[:40]}")
+                    except Exception as e:
+                        print(f"[INSERT ERROR] {e}")
+                        failed_count += 1
                 else:
                     failed_count += 1
 
-                time.sleep(0.2)
+                time.sleep(0.15)
 
-        print(f"[INFO] عدد الجمل المترجمة: {translated_count}")
-        print(f"[INFO] عدد الجمل الفاشلة: {failed_count}")
+        print(f"[INFO] عدد النصوص المترجمة: {translated_count}")
+        print(f"[INFO] عدد النصوص الفاشلة: {failed_count}")
 
         if translated_count == 0:
-            bot.reply_to(message, "⚠️ لم يتم ترجمة أي جملة! تحقق من الـ Logs.")
+            bot.reply_to(message, "⚠️ لم يتم ترجمة أي نص! تحقق من الـ Logs.")
             return
 
-        output_pdf_io = io.BytesIO()
-        doc.save(output_pdf_io)
-        doc.close()
-        output_pdf_io.seek(0)
+        # ===== حفظ الملف =====
+        output_io = io.BytesIO()
+        prs.save(output_io)
+        output_io.seek(0)
 
         bot.send_document(
             message.chat.id,
-            output_pdf_io,
-            visible_file_name="translated_colored.pdf",
-            caption=f"✅ تمت ترجمة {translated_count} جملة مع الحفاظ على الألوان!"
+            output_io,
+            visible_file_name="translated_presentation.pptx",
+            caption=f"✅ تمت ترجمة {translated_count} نص!\n📄 الملف جاهز بصيغة PPTX"
         )
 
     except Exception as e:
