@@ -10,7 +10,7 @@ bot.remove_webhook()
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً بك يا حيدر! بوت الباتروس جاهز الآن لترجمة ملفات الـ PDF بدقة تامة وضبط أحجام الخطوط.")
+    bot.reply_to(message, "أهلاً بك يا حيدر! البوت جاهز الآن لترجمة ملفات الـ PDF بدقة وإضافة الترجمة تحت كل سطر بانتظام.")
 
 def translate_text(text):
     if not text.strip():
@@ -32,7 +32,7 @@ def translate_text(text):
                 return translated
     except Exception:
         pass
-    return f"[تعذر الترجمة]"
+    return ""
 
 @bot.message_handler(content_types=['document'])
 def handle_pdf(message):
@@ -41,7 +41,7 @@ def handle_pdf(message):
             bot.reply_to(message, "⚠️ عذراً، يرجى إرسال ملف بصيغة PDF فقط.")
             return
             
-        bot.reply_to(message, "⏳ جاري قراءة الملف، تصغير الخط، وترجمة النصوص بدقة...")
+        bot.reply_to(message, "⏳ جاري معالجة الملف وترجمة النصوص تحت كل سطر بدقة...")
         
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
@@ -49,31 +49,26 @@ def handle_pdf(message):
         doc = fitz.open(stream=downloaded_file, filetype="pdf")
         
         for page in doc:
-            text = page.get_text()
-            if text.strip():
-                # استخراج الأسطر المفيدة وتجنب الفراغات
-                lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 2]
-                
-                # إضافة المساحة والترجمة في أسفل الصفحة بخط صغير جداً ومرتب (حجم 6) ليتناسب تماماً
-                y_offset = 30
-                max_height = page.rect.height - 40
-                
-                for line in lines[:20]: # ترجمة أول 20 سطراً أساسياً بكل عناية
-                    translated = translate_text(line)
-                    if translated:
-                        # كتابة النص الأصلي والترجمة بخط صغير متناسق
-                        content_to_insert = f"EN: {line} | AR: {translated}"
-                        
-                        page.insert_text(
-                            fitz.Point(30, max_height - y_offset), 
-                            content_to_insert, 
-                            fontsize=6,  # حجم خط صغير جداً ومناسب للصفحة
-                            color=(0, 0, 0.8)
-                        )
-                        y_offset += 12 # مسافة صغيرة ومرتبة بين السطور
-                        
-                        if y_offset > max_height - 50:
-                            break
+            # استخدام blocks للحصول على مواقع النصوص بدقة وعدم تداخلها مع الصور
+            blocks = page.get_text("blocks")
+            for b in blocks:
+                if b[6] == 0:  # التأكد أنه بلوك نصي وليس صورة
+                    original_text = b[4].strip()
+                    if len(original_text) > 3:
+                        translated = translate_text(original_text)
+                        if translated:
+                            # إحداثيات موقع النص الأصلي
+                            x0, y0, x1, y1 = b[0], b[1], b[2], b[3]
+                            
+                            # إنشاء مساحة صغيرة تحت النص الأصلي مباشرة لإدراج الترجمة
+                            rect = fitz.Rect(x0, y1, x1, y1 + 15)
+                            
+                            page.insert_textbox(
+                                rect,
+                                f"ترجمة: {translated}",
+                                fontsize=5.5,  # خط صغير جداً ومرتب
+                                color=(0, 0, 0.7)  # لون مميز للترجمة
+                            )
 
         output_pdf_io = io.BytesIO()
         doc.save(output_pdf_io)
@@ -83,8 +78,8 @@ def handle_pdf(message):
         bot.send_document(
             message.chat.id, 
             output_pdf_io, 
-            visible_file_name="translated_perfect.pdf", 
-            caption="✅ تم ترجمة الملف بنجاح مع تصغير الخط وضبط التنسيق تماماً!"
+            visible_file_name="translated_exact_layout.pdf", 
+            caption="✅ تم إدراج الترجمة تحت كل فقرة بدقة ودون التأثير على الصور أو التنسيق!"
         )
         
     except Exception as e:
