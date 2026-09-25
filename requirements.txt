@@ -1,3 +1,4 @@
 pyTelegramBotAPI
 PyPDF2
 requests
+reportlab
