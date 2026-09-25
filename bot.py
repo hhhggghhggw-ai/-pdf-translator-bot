@@ -3,7 +3,6 @@ import telebot
 from deep_translator import GoogleTranslator
 import PyPDF2
 import io
-import time
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnphMu9"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -33,21 +32,19 @@ def handle_pdf(message):
         reader = PyPDF2.PdfReader(pdf_file)
         
         extracted_text = ""
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
+        # أخذ أول صفحة فقط لتجنب الضغط والخطأ
+        if len(reader.pages) > 0:
+            extracted_text = reader.pages[0].extract_text() or ""
                 
         if not extracted_text.strip():
-            bot.reply_to(message, "⚠️ عذراً، لم يتم العثور على نصوص قابلة للقراءة داخل الملف.")
+            bot.reply_to(message, "⚠️ عذراً، لم يتم العثور على نصوص قابلة للقراءة في الصفحة الأولى من الملف.")
             return
             
-        # اقتطاع جزء مناسب وآمن لتجنب حظر جوجل وتتم الترجمة بنجاح
-        text_to_translate = extracted_text[:1500]
+        # تقليل عدد الحروف المترجمة لضمان عدم حدوث حظر
+        short_text = extracted_text[:400]
+        translated_text = translator.translate(short_text)
         
-        translated_text = translator.translate(text_to_translate)
-        
-        bot.reply_to(message, f"📄 **نتيجة الترجمة (أول جزء من الملف):**\n\n{translated_text}")
+        bot.reply_to(message, f"📄 **نتيجة ترجمة الصفحة الأولى:**\n\n{translated_text}")
         
     except Exception as e:
         bot.reply_to(message, f"❌ حدث خطأ أثناء الترجمة: {str(e)}")
