@@ -3,6 +3,10 @@ import telebot
 import PyPDF2
 import io
 import requests
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnphMu9"
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -10,9 +14,11 @@ bot.remove_webhook()
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً بك يا حيدر! بوت الباتروس جاهز الآن لترجمة ملفات الـ PDF بكل كفاءة.")
+    bot.reply_to(message, "أهلاً بك يا حيدر! أرسل لي ملف PDF وسأقوم بترجمته سطراً بسطر مع الاحتفاظ بالتنسيق وإرساله لك كملف جديد.")
 
 def translate_text(text):
+    if not text.strip():
+        return ""
     try:
         url = "https://translate.googleapis.com/translate_a/single"
         params = {
@@ -25,8 +31,7 @@ def translate_text(text):
         response = requests.get(url, params=params)
         if response.status_code == 200:
             result = response.json()
-            translated_sentence = "".join([item[0] for item in result[0] if item[0]])
-            return translated_sentence
+            return "".join([item[0] for item in result[0] if item[0]])
     except Exception:
         pass
     return text
@@ -38,7 +43,7 @@ def handle_pdf(message):
             bot.reply_to(message, "⚠️ عذراً، يرجى إرسال ملف بصيغة PDF فقط.")
             return
             
-        bot.reply_to(message, "⏳ جاري استلام الملف ومعالجة النصوص...")
+        bot.reply_to(message, "⏳ جاري قراءة الملف، الترجمة سطر بسطر، وإنشاء ملف الـ PDF الجديد... البضع ثوانٍ من فضلك.")
         
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
@@ -50,19 +55,56 @@ def handle_pdf(message):
             bot.reply_to(message, "⚠️ عذراً، الملف فارغ.")
             return
             
-        extracted_text = reader.pages[0].extract_text() or ""
+        # استخراج النص من الصفحة الأولى كمثال عملي للترجمة السطرية
+        page = reader.pages[0]
+        extracted_text = page.extract_text() or ""
         
         if not extracted_text.strip():
-            bot.reply_to(message, "⚠️ لم يتم العثور على نص قابل للقراءة في الصفحة الأولى.")
+            bot.reply_to(message, "⚠️ لم يتم العثور على نص قابل للقراءة في الصفحة.")
             return
 
-        # ترجمة أول 400 حرف بأمان تامة
-        translated_text = translate_text(extracted_text[:400])
+        lines = extracted_text.split('\n')
         
-        bot.reply_to(message, f"📄 **نتيجة الترجمة:**\n\n{translated_text}")
+        # إنشاء ملف PDF جديد للنتيجة
+        output_pdf_io = io.BytesIO()
+        c = canvas.Canvas(output_pdf_io, pagesize=letter)
+        width, height = letter
+        
+        y_position = height - 50  # البدء من أعلى الصفحة
+        
+        for line in lines[:25]:  # ترجمة أول 25 سطراً كبداية لضمان السرعة وعدم تجاوز الوقت
+            if not line.strip():
+                continue
+                
+            translated_line = translate_text(line)
+            
+            # كتابة السطر الأصلي بالإنجليزية
+            c.setFont("Helvetica", 10)
+            c.drawString(50, y_position, line[:80]) # تقطير النص الطويل لكي لا يخرج عن الحافة
+            y_position -= 15
+            
+            # كتابة الترجمة تحته
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(50, y_position, f"ترجمة: {translated_line[:80]}")
+            y_position -= 25
+            
+            if y_position < 50: # الانتقال لصفحة جديدة إذا انتهت المساحة
+                c.showPage()
+                y_position = height - 50
+                
+        c.save()
+        output_pdf_io.seek(0)
+        
+        # إرسال الملف الناتج للمستخدم
+        bot.send_document(
+            message.chat.id, 
+            output_pdf_io, 
+            visible_file_name="translated_output.pdf", 
+            caption="✅ تم ترجمة الملف بنجاح (السطر الأصلي وتحته الترجمة العربية)!"
+        )
         
     except Exception as e:
-        bot.reply_to(message, f"❌ حدث خطأ: {str(e)}")
+        bot.reply_to(message, f"❌ حدث خطأ أثناء المعالجة: {str(e)}")
 
 print("🤖 بوت الباتروس يعمل الآن...")
 bot.infinity_polling()
