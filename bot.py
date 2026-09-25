@@ -3,13 +3,10 @@ import telebot
 from deep_translator import GoogleTranslator
 import PyPDF2
 import io
+import time
 
-# جلب توكن البوت من متغيرات البيئة بأمان (أو وضعه مباشرة)
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "8951863527:AAHCDAjJOCnphMu9"
-
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# حذف أي ويبهوك قديم معلق لحل مشكلة التعارض (Conflict Error)
 bot.remove_webhook()
 
 translator = GoogleTranslator(source='auto', target='ar')
@@ -18,7 +15,7 @@ translator = GoogleTranslator(source='auto', target='ar')
 def send_welcome(bot_message):
     bot.reply_to(
         bot_message,
-        "أهلاً بك يا حيدر! بوت ترجمة ملفات الـ PDF يعمل الآن بكفاءة وجاهز لاستلام ملفاتك."
+        "أهلاً بك يا حيدر! بوت ترجمة ملفات الـ PDF جاهز لاستلام ملفاتك."
     )
 
 @bot.message_handler(content_types=['document'])
@@ -42,16 +39,18 @@ def handle_pdf(message):
                 extracted_text += text + "\n"
                 
         if not extracted_text.strip():
-            bot.reply_to(message, "⚠️ عذراً، لم يتم العثور على نصوص قابلة للقرائة داخل ملف الـ PDF.")
+            bot.reply_to(message, "⚠️ عذراً، لم يتم العثور على نصوص قابلة للقراءة داخل الملف.")
             return
             
-        # ترجمة النصوص (أخذ أول جزء لتجنب تجاوز الحد الأقصى)
-        translated_text = translator.translate(extracted_text[:4000])
+        # اقتطاع جزء مناسب وآمن لتجنب حظر جوجل وتتم الترجمة بنجاح
+        text_to_translate = extracted_text[:1500]
         
-        bot.reply_to(message, f"📄 **نتيجة الترجمة:**\n\n{translated_text}")
+        translated_text = translator.translate(text_to_translate)
+        
+        bot.reply_to(message, f"📄 **نتيجة الترجمة (أول جزء من الملف):**\n\n{translated_text}")
         
     except Exception as e:
-        bot.reply_to(message, f"❌ حدث خطأ أثناء معالجة الملف: {str(e)}")
+        bot.reply_to(message, f"❌ حدث خطأ أثناء الترجمة: {str(e)}")
 
 print("🤖 البوت يعمل الآن ويستمع للرسائل...")
 bot.infinity_polling()
