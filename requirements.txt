@@ -3,3 +3,5 @@ PyPDF2
 requests
 pymupdf
 deep-translator
+arabic-reshaper
+python-bidi
