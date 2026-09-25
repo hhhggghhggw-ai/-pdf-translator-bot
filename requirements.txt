@@ -1,7 +1,6 @@
 pyTelegramBotAPI
-PyPDF2
-requests
-pymupdf
+python-pptx
+Pillow
 deep-translator
 arabic-reshaper
 python-bidi
